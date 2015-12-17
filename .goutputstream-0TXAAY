@@ -1,0 +1,77 @@
+var ipfsAPI = require('ipfs-api');
+
+var sleep = require('sleep');
+
+var DocumentStore = function (serverIp,serverPort) {
+	this.serverIp = serverIp;
+	this.serverPort = serverPort;
+	
+	this._ipfs = ipfsAPI(this.serverIp, this.serverPort);
+	var docStore = this;
+	docStore._ipfs.id(function(err,res) {
+		if(err || !res) return console.trace(err);
+		docStore._peerId = res.ID;
+		console.log(docStore._peerId);
+	});
+	
+};
+
+/* PRIVATE FUNCTIONS */
+
+DocumentStore.prototype._getIndex = function (callback) {
+	_this = this;
+	console.log('/ipfs/'+this._peerId);
+	this._ipfs.name.resolve('/ipfs/'+this._peerId,function(err,resolveRes) {
+		var _resolveRes = resolveRes;
+		var apply = function() {
+			indexHash = _resolveRes;
+			console.log("indexHash = ");
+			console.log(indexHash);
+		};
+		
+		if(err || !resolveRes) {
+			console.trace(err);
+			console.trace(resolveRes);
+			// no index existing, so create one
+			_this._ipfs.add(new Buffer(JSON.stringify({})),function(err,addNewIndexRes) {
+				if(err || !addNewIndexRes) return console.trace(err);
+				console.log("addNewIndexRes =");
+				console.log(addNewIndexRes);
+				_this._ipfs.pin.add(addNewIndexRes[0].Hash,function(err,pinAddNewIndex) {
+					if(err || !addNewIndexRes) return console.trace(err);
+					//~ _this._ipfs.name.publish(addNewIndexRes[0].Hash,function(err,publishRes) {
+						//~ if(err || !addNewIndexRes) return console.trace(err);
+						//~ apply();
+					//~ });
+				});
+			});
+		} else {
+			apply();
+		}
+		
+	});
+};
+
+/* PUBLIC FUNCTIONS */
+
+
+DocumentStore.prototype.getDocument = function (fileId) {
+	
+};
+
+DocumentStore.prototype.putDocument = function (fileId, newContent) {
+	
+};
+
+
+db = new DocumentStore("localhost","5001");
+
+while(!db._peerId) {
+	sleep.sleep(1);
+	console.log(">"+db._peerId);
+}
+console.log("end!");
+//~ db._getIndex(function(bla){
+	//~ console.log(bla);
+//~ });
+//~ db.putDocument("jeSuisUnFichier.txt","bla bla bla");
