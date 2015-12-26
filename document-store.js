@@ -10,31 +10,109 @@ var DocumentStore = function (serverIp,serverPort) {
 
 /* PRIVATE FUNCTIONS */
 
+DocumentStore.prototype._getIndexHash = function (callback) {
+	this._ipfs.name.resolve(this._peerId,function(err,res) {
+		if(err || !res) return callback(err);
+		_indexHash = res.Path;
+		callback(undefined,_indexHash);
+	});
+};
+
 DocumentStore.prototype._getIndex = function (callback) {
+	//~ console.log('_getIndex start ok');
 	_this = this;
-	this._ipfs.name.resolve(this._peerId,function(err,resolveRes) {
-		var _resolveRes = resolveRes.Path;
-		_this._ipfs.cat(_resolveRes,function(err,indexRes) {
-			if(err || !resolveRes) {
+	_this._getIndexHash(function (err,indexHash) {
+		if(err || !indexHash) return callback(err);
+		//~ console.log('_getIndex _getIndexHash ok');
+		_this._ipfs.cat(indexHash,function(err,indexRes) {
+			if(err || !indexRes) {
+				console.log("> "+(""+err));
+				console.log("> "+(""+err).indexOf('this dag node is a directory'));
+				console.log("> "+((""+err).indexOf('this dag node is a directory') > 0));
+				if((""+err).indexOf('this dag node is a directory') > 0) {
+					var notValidIndex = true;
+				} else {
+					return callback(err);
+				}
+			} else {
+				//~ console.log('_getIndex _ipfs.cat ok');
+				try {
+					index = JSON.parse(indexRes._readableState.buffer.toString('utf-8'));
+					if(typeof index['index'] === 'undefined') {
+						var notValidIndex = true;
+					}
+				} catch(parseErr) {
+					var parseError = true;
+				}
+			}
+			console.log('_getIndex try-catch ok '+parseError+'/'+notValidIndex+' => '+(parseError || notValidIndex));
+			if(parseError || notValidIndex) {
 				// no index existing, so create one
-				_this._ipfs.add(new Buffer(JSON.stringify({'index':_resolveRes})),function(err,addNewIndexRes) {
-					if(err || !addNewIndexRes) return console.trace(err);
-					_resolveRes = addNewIndexRes;
-					_this._ipfs.pin.add(addNewIndexRes[0].Hash,function(err,pinAddNewIndex) {
-						if(err || !addNewIndexRes) return console.trace(err);
-						_this._ipfs.name.publish(addNewIndexRes[0].Hash,function(err,publishRes) {
-							if(err || !addNewIndexRes) return console.trace(err);
-							callback(
-								{}
-							);
-						});
+				_this._addDocument(JSON.stringify({'index':''}),function(err,fileHash) {
+					if(err || !fileHash) return callback(err);
+					//~ console.log('_getIndex _addDocument ok');
+					_this._ipfs.name.publish(fileHash,function(err,publishRes) {
+						if(err || !publishRes) return callback(err);
+						//~ console.log('_getIndex _ipfs.name.publish ok');
+						callback(undefined,{'index':''});
 					});
 				});
 			} else {
-				callback(
-					JSON.parse(indexRes._readableState.buffer.toString('utf-8'))
-				);
+				callback(undefined,index);
 			}
+		});
+	});
+};
+
+DocumentStore.prototype._addDocument = function(fileContent,callback) {
+	console.log('_addDocument start ok '+fileContent);
+	_this._ipfs.add(new Buffer(fileContent),function(err,res) {
+		console.log('_addDocument _ipfs.add '+err);
+		if(err || !res) return callback(err);
+		console.log('_addDocument _ipfs.add ok');
+		var fileHash = res[0].Hash;
+		_this._ipfs.pin.add(fileHash,function(err,res) {
+			console.log('_addDocument _ipfs.pin.add');
+			if(err || !res) return callback(err);
+			console.log('_addDocument _ipfs.pin.add ok');
+			callback(undefined,fileHash);
+		});
+	});
+};
+
+DocumentStore.prototype._removeDocument = function(hashFile,callback) {
+	var _this = this;
+	_this._ipfs.pin.remove(hashFile,function(err,res) {
+		if(err || !res) return callback(err);
+		callback();
+	});
+};
+
+DocumentStore.prototype._updateIndex = function (newIndex,callback) {
+	//~ console.log("_updateIndex start ok => "+newIndex);
+	var _this = this;
+	_this._getIndexHash(function(err,previousIndexHash) {
+		//~ console.log("_updateIndex _getIndexHash => "+err+'/'+previousIndexHash);
+		if(err || !previousIndexHash) return callback(err);
+		//~ console.log("_updateIndex _getIndexHash ok");
+		_this._addDocument(newIndex,function(err,newIndexHash) {
+			//~ console.log('_updateIndex _addDocument => '+err+'/'+newIndexHash);
+			if(err || !newIndexHash) return callback(err);
+			//~ console.log("_updateIndex _addDocument ok");
+		
+			_this._ipfs.name.publish(newIndexHash,function(err,res) {
+				console.log("_updateIndex _ipfs.name.publish => "+err+'/'+JSON.stringify(res));
+				if(err || !res) return callback(err);
+				console.log("_updateIndex _ipfs.name.publish ok");
+				if(typeof newIndexHash !== 'undefined') {
+					_this._removeDocument(previousIndexHash,function(err,res) {
+						//~ console.log("_updateIndex _removeDocument ok");
+						callback(err);
+					});
+				} else {
+					callback();
+				}
+			});
 		});
 	});
 };
@@ -42,28 +120,93 @@ DocumentStore.prototype._getIndex = function (callback) {
 /* PUBLIC FUNCTIONS */
 
 DocumentStore.prototype.init = function (callback) {
-	var docStore = this;
-	docStore._ipfs.id(function(err,res) {
-		if(err || !res) return console.trace(err);
-		docStore._peerId = res.ID;
+	var _this = this;
+	_this._ipfs.id(function(err,res) {
+		if(err || !res) return callback(err);
+		_this._peerId = res.ID;
 		callback();
 	});
 };
 
-DocumentStore.prototype.getDocument = function (fileId) {
-	
+DocumentStore.prototype.getDocument = function (fileId,callback) {
+	var _this = this;
+	_this._getIndex(function(err,index) {
+		if(err || !index) return callback(err);
+		console.log("getDocument _getIndex > "+JSON.stringify(index));
+		if(typeof index[fileId] !== 'undefined') {
+			_this._ipfs.cat(index[fileId],function(err,res) {
+				if(err || !res) return callback(err);
+				callback(undefined,res._readableState.buffer.toString('utf-8'));
+			});
+		} else {
+			callback('File not exists.');
+		}
+	});
 };
 
-DocumentStore.prototype.putDocument = function (fileId, newContent) {
-	
+DocumentStore.prototype.removeDocument = function (fileId,callback) {
+	var _this = this;
+	_this._getIndex(function(index) {
+		if(typeof index[fileId] !== 'undefined') {
+			_this._removeDocument(index[fileId],function() {
+				delete index[fileId];
+				callback();
+			});
+		} else {
+			callback('File not exists.');
+		}
+	});
+};
+
+DocumentStore.prototype.putDocument = function (fileId, newContent, callback) {
+	//~ console.log('put start ok');
+	var _this = this;
+	_this._getIndex(function(err,index) {
+		if(err || !index) return callback(err);
+		//~ console.log('put _getIndex ok');
+		_this._addDocument(newContent,function(err,newFileHash) {
+			if(err || !newFileHash) return callback(err);
+			//~ console.log('put _addDocument ok');
+			var previousFileHash = index[fileId];
+			index[fileId] = newFileHash;
+			_this._updateIndex(JSON.stringify(index),function(err) {
+				if(err) return callback(err);
+				//~ console.log('put _updateIndex ok');
+				if(typeof previousFileHash !== 'undefined') {
+					//~ console.log('put previousfile');
+					_this._removeDocument(previousFileHash,function(err) {
+						if(err) return callback(err);
+						//~ console.log('put _removeDocument ok');
+						callback();
+					});
+				} else {
+					//~ console.log('put no previousfile');
+					callback();
+				}
+			});
+		});
+	});
 };
 
 
-db = new DocumentStore("localhost","5001");
-db.init(function() {
-	db._getIndex(function(index){
-		console.log(index);
+var db = new DocumentStore("localhost","5001");
+var doc = "Je suis un document quelconque!";
+var docId = "default.txt";
+db.init(function(err) {
+	if(err) return console.trace(err);
+	console.log('>>>>>>>>>>>>>>>>>>> init ok');
+	db.putDocument(docId,doc,function(err) {
+		if(err) return console.trace(err);
+		console.log('>>>>>>>>>>>>>>>>>>> put document ok');
+		db._getIndex(function(err,index) {
+			console.log(err);
+			console.log(index);
+		});
+		//~ db.getDocument(docId,function(err,doc) {
+			//~ if(err || !doc) return console.trace(err);
+			//~ console.log('>>>>>>>>>>>>>>>>>>> get ok');
+			//~ console.log(doc);
+		//~ });
+		
 	});
 });
-
-//~ db.putDocument("jeSuisUnFichier.txt","bla bla bla");
